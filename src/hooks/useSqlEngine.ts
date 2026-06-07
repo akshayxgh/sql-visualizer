@@ -1,9 +1,16 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { createDatabase, executeQuery, closeDatabase } from '@/lib/sqlEngine'
 import { parseIncrementalStages } from '@/lib/queryParser'
-import { diffRows, keptRows, countDiff } from '@/lib/rowDiffer'
+import {
+  diffRows,
+  keptRows,
+  countDiff,
+  buildGroupBuckets,
+  extractGroupByColumn,
+} from '@/lib/rowDiffer'
 import { matchesExpectedOutput } from '@/lib/resultMatcher'
 import { isSqlError } from '@/types/sql'
+import type { SqlResult } from '@/types/sql'
 import type { Database } from 'sql.js'
 import type { TransformationStage, Row } from '@/types/transformation'
 import type { Exercise } from '@/types/exercise'
@@ -15,6 +22,8 @@ export interface SqlEngineState {
   stages: TransformationStage[]
   isCorrect: boolean
   errorMessage: string | null
+  execute: (sql: string) => void
+  reset: () => void
 }
 
 export interface SqlEngineActions {
@@ -25,8 +34,9 @@ export interface SqlEngineActions {
 export function useSqlEngine(
   exercise: Exercise | null,
   seedSql: string | null
-): SqlEngineState & SqlEngineActions {
+): SqlEngineState {
   const dbRef = useRef<Database | null>(null)
+
   const [status, setStatus] = useState<EngineStatus>('idle')
   const [stages, setStages] = useState<TransformationStage[]>([])
   const [isCorrect, setIsCorrect] = useState(false)
@@ -37,23 +47,23 @@ export function useSqlEngine(
       setStatus('idle')
       return
     }
+
     let cancelled = false
+
     async function init() {
       setStatus('loading')
       setStages([])
       setIsCorrect(false)
       setErrorMessage(null)
-      
+
       if (dbRef.current) {
         closeDatabase(dbRef.current)
         dbRef.current = null
       }
+
       try {
         const db = await createDatabase(seedSql!)
-        if (cancelled) {
-          closeDatabase(db)
-          return
-        }
+        if (cancelled) { closeDatabase(db); return }
         dbRef.current = db
         setStatus('ready')
       } catch (err) {
@@ -65,10 +75,9 @@ export function useSqlEngine(
         }
       }
     }
+
     init()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [exercise?.id, seedSql])
 
   useEffect(() => {
@@ -84,7 +93,9 @@ export function useSqlEngine(
     (sql: string) => {
       if (!dbRef.current || !exercise) return
       const db = dbRef.current
+
       const parsedStages = parseIncrementalStages(sql)
+
       if (parsedStages.length === 0) {
         setStages([])
         setIsCorrect(false)
@@ -92,78 +103,140 @@ export function useSqlEngine(
       }
 
       const newStages: TransformationStage[] = []
-      
-      // CRITICAL: We always track the initial base table rows (FROM) separately 
-      // so sorting and filtering stages can accurately determine row offsets!
-      let baseTableRows: Row[] = []
+      let previousRows: Row[] = []
       let isFirstStage = true
 
-      for (const parsed of parsedStages) {
+      for (let i = 0; i < parsedStages.length; i++) {
+        const parsed = parsedStages[i]
+        const isGroupBy = parsed.keyword === 'GROUP BY'
+        const isHaving  = parsed.keyword === 'HAVING'
+
         const result = executeQuery(db, parsed.cumulativeSql)
-        if (isSqlError(result)) {
-          break
+
+        if (isSqlError(result)) break
+
+        const currentRows: Row[] = result.rows ?? []
+
+        // ── GROUP BY stage ─────────────────────────────────────────────
+        if (isGroupBy) {
+          const groupByCol = extractGroupByColumn(parsed.cumulativeSql)
+          if (!groupByCol) continue
+
+          // Look ahead: if HAVING follows, execute it now so we can
+          // mark removed groups on the same card
+          let havingRows: Row[] | null = null
+          const nextParsed = parsedStages[i + 1]
+          if (nextParsed?.keyword === 'HAVING') {
+            const havingResult = executeQuery(db, nextParsed.cumulativeSql)
+            if (!isSqlError(havingResult)) {
+              havingRows = havingResult.rows ?? []
+            }
+          }
+
+          const buckets = buildGroupBuckets(
+            previousRows,
+            currentRows,
+            groupByCol,
+            havingRows
+          )
+
+          const keptGroups    = buckets.filter((b) => !b.isRemoved).length
+          const removedGroups = buckets.filter((b) =>  b.isRemoved).length
+
+          newStages.push({
+            id: 'group_by',
+            label: parsed.label,
+            clauseKeyword: 'GROUP BY',
+            stageType: 'grouped',
+            rows: [],
+            keptCount: keptGroups,
+            removedCount: removedGroups,
+            groups: buckets,
+            groupByColumn: groupByCol,
+          })
+
+          previousRows = currentRows
+          isFirstStage = false
+          continue
         }
-        const currentRows = result.rows
-        
+
+        // ── HAVING stage ───────────────────────────────────────────────
+        // Already handled inside the GROUP BY branch above.
+        // If a GROUP BY stage was already pushed, skip HAVING here.
+        if (isHaving) {
+          const prevGroupByStage = newStages.find(
+            (s) => s.clauseKeyword === 'GROUP BY'
+          )
+          if (prevGroupByStage) {
+            previousRows = currentRows
+            continue
+          }
+          // No GROUP BY rendered yet — fall through to flat rendering
+        }
+
+        // ── Flat stages (FROM, WHERE, ORDER BY, LIMIT) ─────────────────
         if (isFirstStage) {
           const annotated = keptRows(currentRows)
           const counts = countDiff(annotated)
           newStages.push({
-            id: parsed.keyword.toLowerCase().replace(' ', '_'),
+            id: parsed.keyword.toLowerCase().replace(/\s+/g, '_'),
             label: parsed.label,
             clauseKeyword: parsed.keyword,
+            stageType: 'flat',
             rows: annotated,
             keptCount: counts.kept,
             removedCount: counts.removed,
           })
-          
-          // Save a static snapshot of the raw table data
-          baseTableRows = currentRows
+          previousRows = currentRows
           isFirstStage = false
         } else {
-          // Diff the current active clause rows against the static base table snapshot
-          const diffed = diffRows(baseTableRows, currentRows)
+          const diffed = diffRows(previousRows, currentRows)
           const counts = countDiff(diffed)
-          
-          // CRITICAL FIX: If the data row status is reordered or normal, 
-          // ensure the card displays the row values in their actual sorted SQLite array order!
-          const visualRows = [...diffed].sort((a, b) => {
-            const keyA = JSON.stringify({ ...a, _rowId: undefined, _status: undefined })
-            const keyB = JSON.stringify({ ...b, _rowId: undefined, _status: undefined })
-            
-            const idxA = currentRows.findIndex(r => JSON.stringify(r) === keyA)
-            const idxB = currentRows.findIndex(r => JSON.stringify(r) === keyB)
-            
-            // Keeps deleted rows cleanly appended at the bottom of the grid
-            if (idxA === -1) return 1
-            if (idxB === -1) return -1
-            return idxA - idxB
-          })
-
           newStages.push({
-            id: parsed.keyword.toLowerCase().replace(' ', '_'),
+            id: parsed.keyword.toLowerCase().replace(/\s+/g, '_'),
             label: parsed.label,
             clauseKeyword: parsed.keyword,
-            rows: visualRows,
+            stageType: 'flat',
+            rows: diffed,
             keptCount: counts.kept,
             removedCount: counts.removed,
           })
+          previousRows = currentRows
         }
       }
-      
+
       setStages(newStages)
 
+      // ── Completion check ───────────────────────────────────────────────
       if (newStages.length > 0 && exercise.expectedOutput.length > 0) {
-        const lastStageRows = newStages[newStages.length - 1].rows
-          .filter((r) => r._status !== 'removed')
-          .map(({ _rowId: _r, _status: _s, ...rest }) => rest as Row)
-          
-        const correct = matchesExpectedOutput(
-          lastStageRows,
-          exercise.expectedOutput,
-          exercise.validationStrategy
+        const lastStage = newStages[newStages.length - 1]
+
+        let lastRows: Row[]
+        if (lastStage.stageType === 'grouped' && lastStage.groups) {
+          lastRows = lastStage.groups
+            .filter((g) => !g.isRemoved)
+            .map(({ aggregatedRow }) => {
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const { _rowId, _status, ...rest } = aggregatedRow
+              return rest as Row
+            })
+        } else {
+          lastRows = lastStage.rows
+            .filter((r) => r._status !== 'removed')
+            .map((r) => {
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              const { _rowId, _status, ...rest } = r
+              return rest as Row
+            })
+        }
+
+        setIsCorrect(
+          matchesExpectedOutput(
+            lastRows,
+            exercise.expectedOutput,
+            exercise.validationStrategy
+          )
         )
-        setIsCorrect(correct)
       } else {
         setIsCorrect(false)
       }

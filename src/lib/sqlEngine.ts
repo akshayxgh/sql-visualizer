@@ -1,14 +1,17 @@
 import type { SqlJsStatic, Database } from 'sql.js'
-import type { SqlExecutionResult, SqlResult } from '@/types/sql'
+import type { SqlExecutionResult, SqlResult, SqlError } from '@/types/sql'
 
 let sqlJsInstance: SqlJsStatic | null = null
 
 export async function getSqlJs(): Promise<SqlJsStatic> {
   if (sqlJsInstance) return sqlJsInstance
+
   const initSqlJs = (await import('sql.js')).default
+
   sqlJsInstance = await initSqlJs({
     locateFile: () => '/sql-wasm.wasm',
   })
+
   return sqlJsInstance
 }
 
@@ -19,17 +22,25 @@ export async function createDatabase(seedSql: string): Promise<Database> {
   return db
 }
 
+// Explicit return type annotation — this is what fixes the assignability error
 export function executeQuery(db: Database, sql: string): SqlExecutionResult {
   const trimmed = sql.trim()
+
   if (!trimmed) {
-    return { isError: true, message: 'Empty query' }
+    const err: SqlError = { isError: true, message: 'Empty query' }
+    return err
   }
+
   try {
     const results = db.exec(trimmed)
+
     if (results.length === 0) {
-      return { columns: [], rows: [] }
+      const ok: SqlResult = { columns: [], rows: [] }
+      return ok
     }
+
     const { columns, values } = results[0]
+
     const rows = values.map((valueRow) => {
       const rowObject: Record<string, string | number | null> = {}
       columns.forEach((col, index) => {
@@ -37,10 +48,14 @@ export function executeQuery(db: Database, sql: string): SqlExecutionResult {
       })
       return rowObject
     })
-    return { columns, rows } satisfies SqlResult
+
+    const ok: SqlResult = { columns, rows }
+    return ok
+
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown SQL error'
-    return { isError: true, message }
+    const error: SqlError = { isError: true, message }
+    return error
   }
 }
 
@@ -48,6 +63,6 @@ export function closeDatabase(db: Database): void {
   try {
     db.close()
   } catch {
-    // Database instance already closed securely
+    // Already closed
   }
 }

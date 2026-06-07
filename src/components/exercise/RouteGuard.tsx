@@ -14,7 +14,7 @@ export function RouteGuard({ exerciseId, children }: RouteGuardProps) {
 
   useEffect(() => {
     // Define the chronological order of exercises matching their unique IDs
-    const exerciseChronology = ['ex-001', 'ex-002', 'ex-003', 'ex-004', 'ex-005']
+    const exerciseChronology = ['ex-001', 'ex-002', 'ex-003', 'ex-004', 'ex-005', 'ex-006', 'ex-007', 'ex-008']
     const currentIdx = exerciseChronology.indexOf(exerciseId)
 
     // Rule: First exercise is always unlocked

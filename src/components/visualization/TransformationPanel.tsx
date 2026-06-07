@@ -1,6 +1,7 @@
 'use client'
 
 import { StageCard } from './StageCard'
+import { GroupByCard } from './GroupByCard'
 import { ExplanationStrip } from './ExplanationStrip'
 import { EmptyVisualization } from './EmptyVisualization'
 import type { TransformationStage } from '@/types/transformation'
@@ -12,20 +13,13 @@ interface TransformationPanelProps {
 
 function extractColumns(stages: TransformationStage[]): string[] {
   if (stages.length === 0) return []
-  const firstWithRows = stages.find((s) => s.rows.length > 0)
-  if (!firstWithRows) return []
-  return Object.keys(firstWithRows.rows[0]).filter(
-    (k) => !k.startsWith('_')
-  )
+  const firstFlat = stages.find((s) => s.stageType === 'flat' && s.rows.length > 0)
+  if (!firstFlat) return []
+  return Object.keys(firstFlat.rows[0]).filter((k) => !k.startsWith('_'))
 }
 
-export function TransformationPanel({
-  stages,
-  tableName,
-}: TransformationPanelProps) {
+export function TransformationPanel({ stages, tableName }: TransformationPanelProps) {
   const columns = extractColumns(stages)
-
-  // Stable copy for timeline iteration mapping
   const reversedStages = [...stages].reverse()
 
   return (
@@ -38,17 +32,17 @@ export function TransformationPanel({
           </span>
         )}
       </div>
-      
+
       {stages.length === 0 ? (
         <EmptyVisualization />
       ) : (
         <div className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4 flex flex-col gap-4">
           <div className="flex flex-col gap-0">
             {reversedStages.map((stage, reversedIndex) => {
-              // Extract original metrics mapping safely
               const originalIndex = stages.length - 1 - reversedIndex
-              
-              return (
+              return stage.stageType === 'grouped' ? (
+                <GroupByCard key={stage.id} stage={stage} index={originalIndex} />
+              ) : (
                 <StageCard
                   key={stage.id}
                   stage={stage}
@@ -60,7 +54,6 @@ export function TransformationPanel({
               )
             })}
           </div>
-          
           <ExplanationStrip stages={stages} tableName={tableName} />
           <div className="h-4" />
         </div>

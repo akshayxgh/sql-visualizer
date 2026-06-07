@@ -226,6 +226,9 @@ function getNextSlug(nextId: string): string {
     'ex-003': 'sort-by-salary',
     'ex-004': 'filter-and-sort',
     'ex-005': 'select-columns',
+    'ex-006': 'count-by-department',
+    'ex-007': 'average-salary-by-department',
+    'ex-008': 'having-filter-groups',
   }
   return slugMap[nextId] ?? ''
 }

@@ -10,25 +10,37 @@ function sentenceFor(stage: TransformationStage, tableName: string): string {
     case 'SELECT':
     case 'FROM':
       return `All ${stage.keptCount} rows loaded from the ${tableName} table.`
+
     case 'WHERE':
-      if (stage.removedCount === 0) {
-        return `WHERE matched all rows — nothing was removed.`
-      }
+      if (stage.removedCount === 0) return `WHERE matched all rows — nothing was removed.`
       return `WHERE removed ${stage.removedCount} row${stage.removedCount > 1 ? 's' : ''} that didn't match the condition. ${stage.keptCount} row${stage.keptCount !== 1 ? 's' : ''} remain.`
+
+    case 'GROUP BY': {
+      const total = stage.keptCount + stage.removedCount
+      const col = stage.groupByColumn ?? 'column'
+      if (stage.removedCount > 0) {
+        return `GROUP BY collapsed rows into ${total} groups by ${col}. HAVING then removed ${stage.removedCount} group${stage.removedCount > 1 ? 's' : ''} — ${stage.keptCount} remain.`
+      }
+      return `GROUP BY collapsed all rows into ${stage.keptCount} group${stage.keptCount !== 1 ? 's' : ''} by ${col}. Each group produces one aggregated output row.`
+    }
+
+    case 'HAVING':
+      return `HAVING filtered groups after aggregation. ${stage.keptCount} group${stage.keptCount !== 1 ? 's' : ''} remain.`
+
     case 'ORDER BY':
       return `ORDER BY rearranged the ${stage.keptCount} remaining rows. Row count stays the same — only position changes.`
+
     case 'LIMIT':
       return `LIMIT trimmed the result to ${stage.keptCount} row${stage.keptCount !== 1 ? 's' : ''}.`
+
     default:
       return `${stage.clauseKeyword} produced ${stage.keptCount} rows.`
   }
 }
 
-export function ExplanationStrip({
-  stages,
-  tableName,
-}: ExplanationStripProps) {
+export function ExplanationStrip({ stages, tableName }: ExplanationStripProps) {
   if (stages.length === 0) return null
+
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 overflow-hidden">
       <div className="px-3 py-2 border-b border-neutral-800">
@@ -37,13 +49,16 @@ export function ExplanationStrip({
         </span>
       </div>
       <ol className="flex flex-col divide-y divide-neutral-800/60">
-        {stages.map((stage, i) => (          <li
-            key={stage.id}
-            className="flex items-start gap-3 px-3 py-2.5"          >            <span className="flex-shrink-0 w-4 h-4 rounded-full bg-neutral-800 flex items-center justify-center mt-0.5">
+        {stages.map((stage, i) => (
+          <li key={stage.id} className="flex items-start gap-3 px-3 py-2.5">
+            <span className="flex-shrink-0 w-4 h-4 rounded-full bg-neutral-800 flex items-center justify-center mt-0.5">
               <span className="text-xs font-mono text-neutral-500">{i + 1}</span>
-            </span>            <span className="text-xs text-neutral-400 leading-relaxed">
+            </span>
+            <span className="text-xs text-neutral-400 leading-relaxed">
               {sentenceFor(stage, tableName)}
-            </span>          </li>        ))}
+            </span>
+          </li>
+        ))}
       </ol>
     </div>
   )

@@ -9,13 +9,16 @@ export function EmptyVisualization() {
           Start typing to see the transformation
         </p>
         <p className="text-xs text-neutral-600 leading-relaxed max-w-xs">
-          As you write SQL, each clause will appear here as a visual step showing exactly what happened to the data.
+          As you write SQL, each clause will appear here as a visual step
+          showing exactly what happened to the data.
         </p>
       </div>
       <div className="flex flex-col gap-1.5 text-left w-full max-w-xs">
         {[
           { clause: 'FROM',     color: 'text-brand-400', desc: 'loads all rows' },
           { clause: 'WHERE',    color: 'text-red-400',   desc: 'removes rows' },
+          { clause: 'GROUP BY', color: 'text-amber-400', desc: 'collapses rows into groups' },
+          { clause: 'HAVING',   color: 'text-red-400',   desc: 'removes groups' },
           { clause: 'ORDER BY', color: 'text-amber-400', desc: 'rearranges rows' },
         ].map(({ clause, color, desc }) => (
           <div key={clause} className="flex items-center gap-2">
